@@ -1,7 +1,7 @@
 # OpenGL Tutorial Link:
 - https://learnopengl.com/book/book_pdf.pdf
 
-# Required Liraries:
+# Required Libraries:
 
 - libsdl2-2.0-0
 - libsdl2-dev
