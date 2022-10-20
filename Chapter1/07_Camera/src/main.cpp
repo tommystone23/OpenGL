@@ -5,6 +5,7 @@
 
 #include "shaders.h"
 #include "stb/stb_image.h"
+#include "camera.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -12,17 +13,6 @@
 
 int SCREEN_WIDTH = 1920;
 int SCREEN_HEIGHT = 1080;
-
-float delta_time = 0.0f; // Time between current frame and last frame
-float last_frame = 0.0f; // Time of last frame
-
-float yaw = 0.0f; // Up and down mouse movement
-float pitch = 0.0f; // Side to side mouse movement
-
-float zoom = 45.0f; // How zoomed in the perspective is
-
-void mouse_callback(SDL_Window *window, int xPos, int yPos, float &lastX, float &lastY);
-void scroll_callback(SDL_Window *window, int y_offset);
 
 int main()
 {
@@ -71,6 +61,9 @@ int main()
 
     // Create shader object
     Shader myShader("shaders/squareTexture.vertex", "shaders/squareTexture.fragment");
+    
+    // Create camera object
+    Camera camera(SCREEN_WIDTH, SCREEN_HEIGHT);
 
     // Generate Texture
     unsigned int texture0;
@@ -194,31 +187,6 @@ int main()
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    // Setup camera
-    // Camera direction
-    glm::vec3 camera_pos = glm::vec3(0.0f, 0.0f, 3.0f);
-    glm::vec3 camera_target = glm::vec3(0.0f, 0.0f, 0.0f);
-    glm::vec3 camera_direction = glm::normalize(camera_pos - camera_target);
-
-    // Setup right axis
-    glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
-    glm::vec3 camera_right = glm::normalize(glm::cross(up, camera_direction));
-
-    // Setup up axis
-    glm::vec3 camera_up = glm::cross(camera_direction, camera_right);
-
-    glm::vec3 camera_front = glm::vec3(0.0f, 0.0f, -1.0f);
-
-    float camera_speed = 0.5f;
-
-    // Mouse Input Parameters
-    int mouseX, mouseY;
-    bool mouse_pressed = false;
-    float lastX = 960, lastY = 540;
-    mouse_callback(window, mouseX, mouseY, lastX, lastY);
-
-    int scrollwheel_offset = 45;
-
     // Set program and texture numbers
     myShader.use();
     myShader.setInt("texture0", 0);
@@ -226,6 +194,9 @@ int main()
 
     // Makes the cubes look 3D
     glEnable(GL_DEPTH_TEST);
+
+    // call mouse_callback before loop to set camera in center of screen
+    camera.mouse_callback();
 
     // Event Loop
     bool quit = false;
@@ -244,16 +215,16 @@ int main()
                     switch(event.key.keysym.sym)
                     {
                         case(SDLK_w):
-                            camera_pos += camera_speed * camera_front;
+                            camera.set_camera_pos('w');
                             break;
                         case(SDLK_a):
-                            camera_pos -= glm::normalize(glm::cross(camera_front, camera_up)) * camera_speed;
+                            camera.set_camera_pos('a');
                             break;
                         case(SDLK_s):
-                            camera_pos -= camera_speed * camera_front;
+                            camera.set_camera_pos('s');
                             break;
                         case(SDLK_d):
-                            camera_pos += glm::normalize(glm::cross(camera_front, camera_up)) * camera_speed;
+                            camera.set_camera_pos('d');
                             break;
                         case(SDLK_ESCAPE):
                             quit = true;
@@ -261,41 +232,34 @@ int main()
                     }
                 // All mouse input for moving camera
                 case(SDL_MOUSEBUTTONDOWN):
-                    mouse_pressed = true;
+                    camera.set_mouse_pressed(true);
                     SDL_SetRelativeMouseMode(SDL_TRUE);
                     break;
                 case(SDL_MOUSEBUTTONUP):
-                    mouse_pressed = false;
+                    camera.set_mouse_pressed(false);
                     SDL_SetRelativeMouseMode(SDL_FALSE);
                     break;
                 case(SDL_MOUSEMOTION):
-                    if(mouse_pressed)
-                    {
-                        mouseX += event.motion.xrel;
-                        mouseY += event.motion.yrel;
-                    }
+                    if(camera.check_mouse_pressed())
+                        camera.set_mouse_coords(event.motion.xrel, event.motion.yrel);
                     break;
                 case(SDL_MOUSEWHEEL):
-                    scrollwheel_offset = event.wheel.y;
-                    scroll_callback(window, scrollwheel_offset);
+                    camera.set_scrollwheel_offset(event.wheel.y);
+                    camera.scroll_callback();
             }
         }
         // Set background colour
         glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        if(mouse_pressed)
+        // While mouse is pressed down, move camera with mouse movement
+        if(camera.check_mouse_pressed())
         {
-            //SDL_GetRelativeMouseState((&mouseX, &mouseY));
-            mouse_callback(window, mouseX, mouseY, lastX, lastY);
+            camera.mouse_callback();
         }
 
-        // This ensures that camera speed is the same regardless of computer speed
-        float current_frame = SDL_GetTicks64();
-        delta_time = current_frame - last_frame;
-        last_frame = current_frame;
-        // Multiply by delta time to ensure speed remains constant on all systems
-        camera_speed = 0.03f * delta_time;
+        // // This ensures that camera speed is the same regardless of computer speed
+        camera.sync_camera_frames();
 
         // Bind Textures
         glActiveTexture(GL_TEXTURE0);
@@ -311,26 +275,19 @@ int main()
         */
 
        // Mouse look direction
-        glm::vec3 direction;
-        direction.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
-        direction.y = sin(glm::radians(pitch));
-        direction.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
-        camera_front = glm::normalize(direction);
-
-
+       camera.calc_mouse_look_direction();
 
         // User input to move around camera
-        glm::mat4 view = glm::lookAt(camera_pos, camera_pos + camera_front, camera_up);
+        //glm::mat4 view = glm::lookAt(camera_pos, camera_pos + camera_front, camera_up);
+        camera.update_view();
 
-
-        glm::mat4 projection = glm::mat4(1.0f);
-        projection = glm::perspective(glm::radians(zoom), 800.0f / 600.0f, 0.1f, 100.0f);
+        camera.update_projection();
 
         int viewLoc = glGetUniformLocation(myShader.ID, "view");
-        glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(camera.get_view()));
 
         int projectionLoc = glGetUniformLocation(myShader.ID, "projection");
-        glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(projection));
+        glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(camera.get_projection()));
 
         glBindVertexArray(VAO[0]);
         glDrawArrays(GL_TRIANGLES, 0, 36);
@@ -351,7 +308,6 @@ int main()
             glDrawArrays(GL_TRIANGLES, 0, 36);
         }
 
-
         // Swap windows
         SDL_GL_SwapWindow(window);
     }
@@ -365,35 +321,4 @@ int main()
     SDL_Quit();
 
     return 0;
-}
-
-void mouse_callback(SDL_Window *window, int xPos, int yPos, float &lastX, float &lastY)
-{
-    float x_offset = (float)xPos - lastX;
-    float y_offset = (float)lastY - yPos; // reversed: y ranges bottom to top
-    lastX = (float)xPos;
-    lastY = (float)yPos;
-
-    const float sensitivity = 0.1f;
-    x_offset *= sensitivity;
-    y_offset *= sensitivity;
-
-    yaw += x_offset;
-    pitch += y_offset;
-
-    // Constraints
-    if(pitch > 89.0f)
-        pitch = 89.0f;
-    if(pitch < -89.0f)
-        pitch = -89.0f;
-}
-
-void scroll_callback(SDL_Window *window, int y_offset)
-{
-    zoom -= (float)y_offset;
-
-    if(zoom < 1.0f)
-        zoom = 1.0f;
-    if(zoom > 45.0f)
-        zoom = 45.0f;
 }
